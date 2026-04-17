@@ -13,8 +13,16 @@ export async function POST(req: NextRequest) {
     }
 
     const res = NextResponse.json({ success: true })
-    res.cookies.set("gs_role", "admin", { httpOnly: true, sameSite: "lax", path: "/" })
-    res.cookies.set("gs_sailor_id", "", { httpOnly: true, sameSite: "lax", path: "/" })
+    res.cookies.set("gs_role", "admin", {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+    })
+    res.cookies.set("gs_sailor_id", "", {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+    })
     return res
   }
 
@@ -24,12 +32,23 @@ export async function POST(req: NextRequest) {
     }
 
     if (!sailorId) {
-      return NextResponse.json({ error: "Leadership login requires a sailor identity." }, { status: 400 })
+      return NextResponse.json(
+        { error: "Leadership login requires a sailor identity." },
+        { status: 400 }
+      )
     }
 
     const res = NextResponse.json({ success: true })
-    res.cookies.set("gs_role", "leadership", { httpOnly: true, sameSite: "lax", path: "/" })
-    res.cookies.set("gs_sailor_id", sailorId, { httpOnly: true, sameSite: "lax", path: "/" })
+    res.cookies.set("gs_role", "leadership", {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+    })
+    res.cookies.set("gs_sailor_id", sailorId, {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+    })
     return res
   }
 
