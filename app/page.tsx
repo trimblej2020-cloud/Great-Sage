@@ -71,13 +71,6 @@ type SailorProgramStatus = {
   is_at_risk?: boolean
 }
 
-type Leader = {
-  id: string
-  division_id: string | null
-  sailor_id: string | null
-  role_title: string
-}
-
 function Card({
   title,
   children,
@@ -105,11 +98,18 @@ function isWithinNext7Days(dateString: string | null) {
 function getWeekLabel(offset: number) {
   const date = new Date()
   date.setDate(date.getDate() + offset)
-  return date.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" })
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "numeric",
+    day: "numeric",
+  })
 }
 
 export default function HomePage() {
-  const [auth, setAuth] = useState({ role: null as string | null, sailorId: null as string | null })
+  const [auth, setAuth] = useState({
+    role: null as string | null,
+    sailorId: null as string | null,
+  })
   const [sailors, setSailors] = useState<Sailor[]>([])
   const [helpfulInfo, setHelpfulInfo] = useState<HelpfulInfo[]>([])
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([])
@@ -117,7 +117,6 @@ export default function HomePage() {
   const [assignments, setAssignments] = useState<ProgramAssignment[]>([])
   const [requirements, setRequirements] = useState<ProgramRequirement[]>([])
   const [statuses, setStatuses] = useState<SailorProgramStatus[]>([])
-  const [leaders, setLeaders] = useState<Leader[]>([])
 
   const loadAll = async () => {
     const [
@@ -128,11 +127,12 @@ export default function HomePage() {
       assignmentsRes,
       requirementsRes,
       statusesRes,
-      leadersRes,
     ] = await Promise.all([
       supabase
         .from("sailors")
-        .select("id, full_name, rank, role, leave_start, leave_end, shift_name, shift_start, shift_end, phone_number, email, current_address, division_id, sponsor_assigned, imr_last_verified")
+        .select(
+          "id, full_name, rank, role, leave_start, leave_end, shift_name, shift_start, shift_end, phone_number, email, current_address, division_id, sponsor_assigned, imr_last_verified"
+        )
         .order("full_name"),
       supabase
         .from("helpful_information")
@@ -155,9 +155,6 @@ export default function HomePage() {
       supabase
         .from("sailor_program_status")
         .select("id, sailor_id, requirement_id, program_assignment_id, value, due_date, completion_date, appointment_at, is_dinq, is_at_risk"),
-      supabase
-        .from("leaders")
-        .select("id, division_id, sailor_id, role_title"),
     ])
 
     setSailors((sailorsRes.data ?? []) as Sailor[])
@@ -167,7 +164,6 @@ export default function HomePage() {
     setAssignments((assignmentsRes.data ?? []) as ProgramAssignment[])
     setRequirements((requirementsRes.data ?? []) as ProgramRequirement[])
     setStatuses((statusesRes.data ?? []) as SailorProgramStatus[])
-    setLeaders((leadersRes.data ?? []) as Leader[])
   }
 
   useEffect(() => {
@@ -178,42 +174,57 @@ export default function HomePage() {
   useEffect(() => {
     if (statuses.length === 0) return
 
-    const today = new Date()
-    const updates: Array<Promise<unknown>> = []
+    let cancelled = false
 
-    statuses.forEach((status) => {
-      const due = status.due_date ? new Date(status.due_date) : null
-      const shouldBeDinq =
-        !!due && due < today && (!status.completion_date || status.completion_date === "")
+    const syncAutomaticFlags = async () => {
+      const today = new Date()
+      let changed = false
 
-      const shouldBeAtRisk =
-        !!due &&
-        due >= today &&
-        (due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 7 &&
-        (!status.completion_date || status.completion_date === "")
+      for (const status of statuses) {
+        const due = status.due_date ? new Date(status.due_date) : null
 
-      if (status.is_dinq !== shouldBeDinq || !!status.is_at_risk !== shouldBeAtRisk) {
-        updates.push(
-          supabase
+        const shouldBeDinq =
+          !!due &&
+          due < today &&
+          (!status.completion_date || status.completion_date === "")
+
+        const shouldBeAtRisk =
+          !!due &&
+          due >= today &&
+          (due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 7 &&
+          (!status.completion_date || status.completion_date === "")
+
+        if (
+          status.is_dinq !== shouldBeDinq ||
+          Boolean(status.is_at_risk) !== shouldBeAtRisk
+        ) {
+          changed = true
+
+          await supabase
             .from("sailor_program_status")
             .update({
               is_dinq: shouldBeDinq,
               is_at_risk: shouldBeAtRisk,
             })
             .eq("id", status.id!)
-        )
+        }
       }
-    })
 
-    if (updates.length > 0) {
-      Promise.all(updates).then(() => loadAll())
+      if (changed && !cancelled) {
+        await loadAll()
+      }
     }
-  }, [statuses.length])
+
+    void syncAutomaticFlags()
+
+    return () => {
+      cancelled = true
+    }
+  }, [statuses])
 
   const currentSailor = sailors.find((s) => s.id === auth.sailorId)
 
   const dinqRows = statuses.filter((s) => s.is_dinq)
-  const atRiskRows = statuses.filter((s) => !s.is_dinq && s.is_at_risk)
 
   const dinqFeed = dinqRows.map((row) => {
     const sailor = sailors.find((s) => s.id === row.sailor_id)
@@ -280,11 +291,21 @@ export default function HomePage() {
   const qualityAlerts = sailors.flatMap((sailor) => {
     const alerts: string[] = []
 
-    if (!sailor.phone_number) alerts.push(`${sailor.rank} ${sailor.full_name} is missing a phone number`)
-    if (!sailor.email) alerts.push(`${sailor.rank} ${sailor.full_name} is missing an email`)
-    if (!sailor.current_address) alerts.push(`${sailor.rank} ${sailor.full_name} is missing a current address`)
-    if (!sailor.sponsor_assigned) alerts.push(`${sailor.rank} ${sailor.full_name} does not have sponsor status marked`)
-    if (!sailor.imr_last_verified) alerts.push(`${sailor.rank} ${sailor.full_name} has no IMR verification date`)
+    if (!sailor.phone_number) {
+      alerts.push(`${sailor.rank} ${sailor.full_name} is missing a phone number`)
+    }
+    if (!sailor.email) {
+      alerts.push(`${sailor.rank} ${sailor.full_name} is missing an email`)
+    }
+    if (!sailor.current_address) {
+      alerts.push(`${sailor.rank} ${sailor.full_name} is missing a current address`)
+    }
+    if (!sailor.sponsor_assigned) {
+      alerts.push(`${sailor.rank} ${sailor.full_name} does not have sponsor status marked`)
+    }
+    if (!sailor.imr_last_verified) {
+      alerts.push(`${sailor.rank} ${sailor.full_name} has no IMR verification date`)
+    }
 
     return alerts
   })
@@ -320,19 +341,6 @@ export default function HomePage() {
     <main className="min-h-screen bg-[#0a1f44]">
       <div className="mx-auto max-w-7xl p-6">
         <header className="mb-6 rounded-3xl bg-[#d4af37] p-6 text-black shadow-lg">
-
-         <div className="mt-4 flex flex-wrap gap-3">
-  <a href="/roster" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Roster</a>
-  <a href="/collaterals" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Programs</a>
-  <a href="/training-center" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Training Center</a>
-  <a href="/cfl-board" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">CFL Board</a>
-  <a href="/divisions" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Divisions</a>
-  <a href="/leave" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Leave</a>
-  <a href="/helpful-info" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Helpful Info</a>
-  {(auth.role === "admin" || auth.role === "leadership") && (
-    <a href="/audit-log" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">Audit Log</a>
-  )}
-</div>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
               <div>
@@ -360,6 +368,36 @@ export default function HomePage() {
                 )}
               </div>
             </div>
+
+            <div className="flex flex-wrap gap-3">
+              <a href="/roster" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Roster
+              </a>
+              <a href="/collaterals" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Programs
+              </a>
+              <a href="/training-center" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Training Center
+              </a>
+              <a href="/cfl-board" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                CFL Board
+              </a>
+              <a href="/divisions" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Divisions
+              </a>
+              <a href="/leave" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Leave
+              </a>
+              <a href="/helpful-info" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                Helpful Info
+              </a>
+              {(auth.role === "admin" || auth.role === "leadership") && (
+                <a href="/audit-log" className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-[#d4af37] shadow-sm">
+                  Audit Log
+                </a>
+              )}
+            </div>
+
             <div className="flex flex-wrap gap-3">
               <a href="/quick-add/add-sailor" className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black shadow-sm">
                 Add Sailor
@@ -417,7 +455,9 @@ export default function HomePage() {
                       <p className="font-semibold">
                         {sailor ? `${sailor.rank} ${sailor.full_name}` : "Unknown Sailor"}
                       </p>
-                      <p className="text-sm">{req.start_date} to {req.end_date}</p>
+                      <p className="text-sm">
+                        {req.start_date} to {req.end_date}
+                      </p>
                     </div>
                   )
                 })
@@ -463,8 +503,12 @@ export default function HomePage() {
               {weekColumns.map((day) => (
                 <div key={day.label} className="rounded-xl border border-yellow-600 bg-gray-50 p-3">
                   <p className="font-semibold">{day.label}</p>
-                  <p className="mt-2 text-sm font-medium">Approved Leave: {day.leaveItems.length}</p>
-                  <p className="text-sm font-medium">Due Items: {day.dueItems.length}</p>
+                  <p className="mt-2 text-sm font-medium">
+                    Approved Leave: {day.leaveItems.length}
+                  </p>
+                  <p className="text-sm font-medium">
+                    Due Items: {day.dueItems.length}
+                  </p>
                 </div>
               ))}
             </div>
